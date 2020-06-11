@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "xrays"
+version = "0.1.0"
+description = ""
+authors = ["Johannes Wienke <languitar@semipol.de>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+click = "^7.1.2"
+pandas = "^1.0.4"
+plotly = "^4.8.1"
+tqdm = "^4.46.1"
+click-pathlib = "^2020.3.13"
+fastparquet = { version = "^0.4.0", extras = ["snappy"] }
+packaging = "^20.4"
+
+[tool.poetry.dev-dependencies]
+
+[tool.poetry.scripts]
+xrays = 'xrays:hotspots'
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
