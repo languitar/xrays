@@ -1,9 +1,10 @@
 import itertools
 import json
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryDirectory
-from typing import Dict, Tuple
+from typing import Dict, Pattern, Tuple
 
 import click
 import click_pathlib
@@ -65,8 +66,9 @@ def count_indentations(file: Path) -> int:
             return 0
 
 
-def acquire_hotspot_base_data(git_root: Path, pattern: str) -> pd.DataFrame:
-    files = list(git_root.glob(pattern))
+def acquire_hotspot_base_data(git_root: Path, pattern: Pattern) -> pd.DataFrame:
+    files = git_root.rglob("*")
+    files = [f for f in files if pattern.fullmatch(str(f.relative_to(git_root)))]
     print(f"Analyzing {len(files)} files")
 
     results: Dict = {
@@ -102,7 +104,7 @@ def hotspots() -> None:
 def compute(git_root: Path, pattern: str, data_dir: Path) -> None:
     data_dir.mkdir(exist_ok=True)
 
-    data = acquire_hotspot_base_data(git_root, pattern)
+    data = acquire_hotspot_base_data(git_root, re.compile(pattern))
     data.to_parquet(hotspot_file(data_dir))
 
 
