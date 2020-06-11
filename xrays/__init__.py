@@ -137,7 +137,9 @@ def visualize(data_dir: Path, viz_dir: Path) -> None:
         size="indentation",
         hover_name="file",
         color="urgency",
+        color_continuous_scale="dense",
     )
+    fig.update_traces(marker={"line": {"width": 1, "color": "gray"}})
 
     out_file = viz_dir / "hotspots.html"
     fig.write_html(str(out_file))
