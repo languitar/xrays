@@ -67,8 +67,14 @@ def count_indentations(file: Path) -> int:
 
 
 def acquire_hotspot_base_data(git_root: Path, pattern: Pattern) -> pd.DataFrame:
-    files = git_root.rglob("*")
-    files = [f for f in files if pattern.fullmatch(str(f.relative_to(git_root)))]
+    files_out = subprocess.run(
+        ["git", "-C", str(git_root), "ls-files"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout
+    files = files_out.splitlines()
+    files = [git_root / f for f in files if pattern.fullmatch(f)]
     print(f"Analyzing {len(files)} files")
 
     results: Dict = {
@@ -98,13 +104,17 @@ def hotspots() -> None:
 
 
 @hotspots.command()
+@click.option(
+    "--file-pattern",
+    default=".*",
+    help="Only include files in the repository matching this regular expression",
+)
 @click.argument("git_root", type=click_pathlib.Path())
-@click.argument("pattern")
 @click.argument("data_dir", type=click_pathlib.Path())
-def compute(git_root: Path, pattern: str, data_dir: Path) -> None:
+def compute(git_root: Path, file_pattern: str, data_dir: Path) -> None:
     data_dir.mkdir(exist_ok=True)
 
-    data = acquire_hotspot_base_data(git_root, re.compile(pattern))
+    data = acquire_hotspot_base_data(git_root, re.compile(file_pattern))
     data.to_parquet(hotspot_file(data_dir))
 
 
