@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 from tempfile import TemporaryDirectory
-from typing import Dict, Pattern, Tuple
+from typing import Dict, List, Pattern, Tuple
 
 import click
 import click_pathlib
@@ -13,18 +13,44 @@ import plotly.express as px
 from tqdm import tqdm
 
 
-def hotspot_file(out_path: Path) -> Path:
+def hotspot_data_file(out_path: Path) -> Path:
     return out_path / "hotspots.parquet"
 
 
-def count_revisions(git_root: Path, file: Path) -> int:
+def file_revision_information(git_root: Path, file: Path) -> pd.DataFrame:
     log_out = subprocess.run(
-        ["git", "-C", str(git_root), "log", "--oneline", "--follow", "--", file],
+        [
+            "git",
+            "-C",
+            str(git_root),
+            "log",
+            "--format=format:%H %aI %cI",
+            "--follow",
+            "--",
+            file,
+        ],
         check=True,
         stdout=subprocess.PIPE,
         text=True,
     ).stdout.splitlines()
-    return len([line for line in log_out if line.strip()])
+
+    commit = []
+    author_date = []
+    commit_date = []
+    for line in log_out:
+        parts = line.split(" ")
+        commit.append(parts[0])
+        author_date.append(parts[1])
+        commit_date.append(parts[2])
+
+    return pd.DataFrame(
+        {
+            "file": str(file),
+            "commit": commit,
+            "author_date": pd.to_datetime(author_date, utc=True),
+            "commit_date": pd.to_datetime(commit_date, utc=True),
+        }
+    )
 
 
 def count_lines(file: Path) -> Tuple[int, int]:
@@ -66,7 +92,7 @@ def count_indentations(file: Path) -> int:
             return 0
 
 
-def acquire_hotspot_base_data(git_root: Path, pattern: Pattern) -> pd.DataFrame:
+def relevant_files_in_git_root(git_root: Path, pattern: Pattern) -> List[Path]:
     files_out = subprocess.run(
         ["git", "-C", str(git_root), "ls-files"],
         check=True,
@@ -74,28 +100,28 @@ def acquire_hotspot_base_data(git_root: Path, pattern: Pattern) -> pd.DataFrame:
         text=True,
     ).stdout
     files = files_out.splitlines()
-    files = [git_root / f for f in files if pattern.fullmatch(f)]
+    return [Path(f) for f in files if pattern.fullmatch(f)]
+
+
+def acquire_file_base_data(git_root: Path, file: Path) -> pd.DataFrame:
+    data = file_revision_information(git_root, file)
+    data["indentation"] = count_indentations(git_root / file)
+    lines_code, line_comment = count_lines(git_root / file)
+    data["lines_code"] = lines_code
+    data["lines_comment"] = line_comment
+
+    return data
+
+
+def acquire_base_data(git_root: Path, pattern: Pattern) -> pd.DataFrame:
+    files = relevant_files_in_git_root(git_root, pattern)
     print(f"Analyzing {len(files)} files")
 
-    results: Dict = {
-        "file": [],
-        "revisions": [],
-        "lines_comment": [],
-        "lines_code": [],
-        "indentation": [],
-    }
+    per_file_data = []
     for file in tqdm(files):
-        # get churn
-        results["file"].append(str(file.relative_to(git_root)))
-        results["revisions"].append(count_revisions(git_root, file))
+        per_file_data.append(acquire_file_base_data(git_root, file))
 
-        results["indentation"].append(count_indentations(file))
-
-        lines_code, line_comment = count_lines(file)
-        results["lines_code"].append(lines_code)
-        results["lines_comment"].append(line_comment)
-
-    return pd.DataFrame(results)
+    return pd.concat(per_file_data)
 
 
 @click.group()
@@ -114,8 +140,8 @@ def hotspots() -> None:
 def compute(git_root: Path, file_pattern: str, data_dir: Path) -> None:
     data_dir.mkdir(exist_ok=True)
 
-    data = acquire_hotspot_base_data(git_root, re.compile(file_pattern))
-    data.to_parquet(hotspot_file(data_dir))
+    data = acquire_base_data(git_root, re.compile(file_pattern))
+    data.to_parquet(hotspot_data_file(data_dir))
 
 
 @hotspots.command()
@@ -124,7 +150,12 @@ def compute(git_root: Path, file_pattern: str, data_dir: Path) -> None:
 def visualize(data_dir: Path, viz_dir: Path) -> None:
     viz_dir.mkdir(exist_ok=True)
 
-    data = pd.read_parquet(hotspot_file(data_dir))
+    data = pd.read_parquet(hotspot_data_file(data_dir))
+
+    data = data.groupby("file", as_index=False).agg(
+        {"commit": "count", "lines_code": "first", "indentation": "first"}
+    )
+    data = data.rename(columns={"commit": "revisions"})
 
     data["urgency"] = (data["indentation"] / data["indentation"].max()) * (
         data["revisions"] / data["revisions"].max()
