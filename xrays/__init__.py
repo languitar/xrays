@@ -4,12 +4,18 @@ from pathlib import Path
 import re
 import subprocess
 from tempfile import TemporaryDirectory
-from typing import Dict, List, Pattern, Tuple
+from typing import List, Pattern, Tuple
 
 import click
 import click_pathlib
+import dash
+import dash_core_components as dcc
+import dash_html_components as html
+from natsort import natsorted
+import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from tqdm import tqdm
 
 
@@ -144,14 +150,7 @@ def compute(git_root: Path, file_pattern: str, data_dir: Path) -> None:
     data.to_parquet(hotspot_data_file(data_dir))
 
 
-@hotspots.command()
-@click.argument("data_dir", type=click_pathlib.Path(exists=True))
-@click.argument("viz_dir", type=click_pathlib.Path())
-def visualize(data_dir: Path, viz_dir: Path) -> None:
-    viz_dir.mkdir(exist_ok=True)
-
-    data = pd.read_parquet(hotspot_data_file(data_dir))
-
+def hotspots_figure(data: pd.DataFrame, cutoff: int = 10) -> go.Figure:
     data = data.groupby("file", as_index=False).agg(
         {"commit": "count", "lines_code": "first", "indentation": "first"}
     )
@@ -160,6 +159,8 @@ def visualize(data_dir: Path, viz_dir: Path) -> None:
     data["urgency"] = (data["indentation"] / data["indentation"].max()) * (
         data["revisions"] / data["revisions"].max()
     ).pow(1.0 / 2)
+
+    data = data[data["revisions"] >= cutoff]
 
     fig = px.scatter(
         data,
@@ -172,10 +173,96 @@ def visualize(data_dir: Path, viz_dir: Path) -> None:
     )
     fig.update_traces(marker={"line": {"width": 1, "color": "gray"}})
 
-    out_file = viz_dir / "hotspots.html"
-    fig.write_html(str(out_file))
+    return fig
 
-    fig.show()
+
+def correlation_figure(data: pd.DataFrame, cutoff: int = 10) -> go.Figure:
+    correlation = (
+        data.merge(data, on="commit", how="inner")
+        .groupby(["file_x", "file_y"], as_index=False)["commit"]
+        .count()
+        .sort_values(["file_x", "file_y"])
+    )
+    # kill diagonal
+    correlation.loc[correlation["file_x"] == correlation["file_y"], "commit"] = 0
+
+    correlation = correlation[correlation["commit"] >= cutoff]
+
+    sort_order = natsorted(correlation["file_x"].unique())
+
+    fig = px.density_heatmap(
+        correlation,
+        x="file_x",
+        y="file_y",
+        z="commit",
+        color_continuous_scale="dense",
+        category_orders={"file_x": sort_order, "file_y": sort_order},
+        labels={"commit": "commits"},
+    )
+    fig.update_layout(xaxis_title="file", yaxis_title="file")
+
+    return fig
+
+
+@hotspots.command()
+@click.argument("data_dir", type=click_pathlib.Path(exists=True))
+def visualize(data_dir: Path) -> None:
+    data = pd.read_parquet(hotspot_data_file(data_dir))
+
+    app = dash.Dash(
+        __name__, external_stylesheets=["https://codepen.io/chriddyp/pen/bWLwgP.css"]
+    )
+
+    file_regex_id = "file_regex"
+    hotspots_figure_id = "file_hotspots"
+    revision_cutoff_id = "correlation_cutoff"
+    correlation_figure_id = "correlations"
+
+    app.layout = html.Div(
+        children=[
+            html.H1(children="Xrays"),
+            html.Div(children="File path RegEx"),
+            dcc.Input(id=file_regex_id, type="text", value=r"\.py$", debounce=True),
+            html.Div(children="Revision cutoff"),
+            dcc.Slider(
+                id=revision_cutoff_id,
+                min=0,
+                max=50,
+                value=10,
+                step=1,
+                marks={i: str(i) for i in range(51)},
+            ),
+            html.H2(children="File Hotspots"),
+            dcc.Graph(id=hotspots_figure_id, figure=hotspots_figure(data)),
+            html.H2(children="File Correlations"),
+            dcc.Graph(id=correlation_figure_id, figure=correlation_figure(data)),
+        ]
+    )
+
+    def filter_data(data: pd.DataFrame, file_regex: str) -> pd.DataFrame:
+        return data[data["file"].str.contains(file_regex)]
+
+    @app.callback(
+        dash.dependencies.Output(hotspots_figure_id, "figure"),
+        [
+            dash.dependencies.Input(file_regex_id, "value"),
+            dash.dependencies.Input(revision_cutoff_id, "value"),
+        ],
+    )
+    def update_hotspot_figure(file_regex: str, cutoff: int) -> go.Figure:
+        return hotspots_figure(filter_data(data, file_regex), cutoff)
+
+    @app.callback(
+        dash.dependencies.Output(correlation_figure_id, "figure"),
+        [
+            dash.dependencies.Input(revision_cutoff_id, "value"),
+            dash.dependencies.Input(file_regex_id, "value"),
+        ],
+    )
+    def update_correlation_figure(cutoff: int, file_regex: str) -> go.Figure:
+        return correlation_figure(filter_data(data, file_regex), cutoff)
+
+    app.run_server(debug=True, use_reloader=False)
 
 
 if __name__ == "__main__":
