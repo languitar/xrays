@@ -33,6 +33,7 @@ def hotspots_figure(data: pd.DataFrame, cutoff: int = 10) -> go.Figure:
         color_continuous_scale="dense",
     )
     fig.update_traces(marker={"line": {"width": 1, "color": "gray"}})
+    fig.update_layout(height=1000)
 
     return fig
 
@@ -67,7 +68,9 @@ def correlation_figure(data: pd.DataFrame, cutoff: int = 10) -> go.Figure:
         color_continuous_scale="dense",
         category_orders={"file_x": sort_order, "file_y": sort_order},
     )
-    fig.update_layout(xaxis_title="file", yaxis_title="file")
+    fig.update_layout(xaxis_title="file", yaxis_title="file", height=1000)
+    fig.update_yaxes(automargin=True)
+    fig.update_xaxes(automargin=True)
 
     return fig
 
@@ -86,22 +89,20 @@ def filter_data(data: pd.DataFrame, file_regex: str) -> pd.DataFrame:
     return data[data["file"].str.contains(file_regex)]
 
 
-def create_app(data: pd.DataFrame) -> dash.Dash:
-    app = dash.Dash(
-        __name__, external_stylesheets=["https://codepen.io/chriddyp/pen/bWLwgP.css"]
-    )
+file_regex_id = "file_regex"
+hotspots_figure_id = "file_hotspots"
+revision_cutoff_id = "correlation_cutoff"
+correlation_figure_id = "correlations"
+correlation_table_id = "correlation_table"
+tab_file_hotspots_id = "file-hotspots"
+tab_file_change_coupling_id = "file-change-coupling"
+tab_id = "tabs"
+tab_content_id = "tab-content"
 
-    file_regex_id = "file_regex"
-    hotspots_figure_id = "file_hotspots"
-    revision_cutoff_id = "correlation_cutoff"
-    correlation_figure_id = "correlations"
-    correlation_table_id = "correlation_table"
 
-    corr_table_data = correlation_table_data(data, 10)
-
-    app.layout = html.Div(
+def common_filters():
+    return html.Div(
         children=[
-            html.H1(children="Xrays"),
             html.Div(
                 children=[
                     html.Label(children="File path RegEx", htmlFor=file_regex_id),
@@ -123,18 +124,61 @@ def create_app(data: pd.DataFrame) -> dash.Dash:
                     ),
                 ]
             ),
-            html.H2(children="File Hotspots"),
-            dcc.Graph(id=hotspots_figure_id, figure=hotspots_figure(data)),
-            html.H2(children="File Correlations"),
-            dcc.Graph(id=correlation_figure_id, figure=correlation_figure(data)),
-            dash_table.DataTable(
-                id=correlation_table_id,
-                data=corr_table_data.to_dict("records"),
-                columns=[{"id": c, "name": c} for c in corr_table_data.columns],
-                page_size=20,
-            ),
         ]
     )
+
+
+def create_app(data: pd.DataFrame) -> dash.Dash:
+    app = dash.Dash(
+        __name__, external_stylesheets=["https://codepen.io/chriddyp/pen/bWLwgP.css"]
+    )
+
+    corr_table_data = correlation_table_data(data, 10)
+
+    tab_render_mapping = {
+        tab_file_hotspots_id: lambda data: dcc.Graph(
+            id=hotspots_figure_id, figure=hotspots_figure(data)
+        ),
+        tab_file_change_coupling_id: lambda data: html.Div(
+            children=[
+                dcc.Graph(id=correlation_figure_id, figure=correlation_figure(data)),
+                dash_table.DataTable(
+                    id=correlation_table_id,
+                    data=corr_table_data.to_dict("records"),
+                    columns=[{"id": c, "name": c} for c in corr_table_data.columns],
+                    page_size=20,
+                ),
+            ],
+        ),
+    }
+
+    app.layout = html.Div(
+        children=[
+            html.H1(children="Xrays"),
+            common_filters(),
+            dcc.Tabs(
+                id=tab_id,
+                value=tab_file_hotspots_id,
+                children=[
+                    dcc.Tab(label="File Hotspots", value=tab_file_hotspots_id),
+                    dcc.Tab(
+                        label="File Change Coupling", value=tab_file_change_coupling_id
+                    ),
+                ],
+            ),
+            html.Div(id=tab_content_id),
+        ]
+    )
+    app.validation_layout = html.Div(
+        app.layout.children + [f(data) for f in tab_render_mapping.values()]
+    )
+
+    @app.callback(
+        dash.dependencies.Output(tab_content_id, "children"),
+        [dash.dependencies.Input(tab_id, "value")],
+    )
+    def render_tabs(tab):
+        return tab_render_mapping[tab](data)
 
     @app.callback(
         dash.dependencies.Output(hotspots_figure_id, "figure"),
