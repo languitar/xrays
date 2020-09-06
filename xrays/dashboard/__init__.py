@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 
 def hotspots_figure(data: pd.DataFrame, cutoff: int = 10) -> go.Figure:
     data = data.groupby("file", as_index=False).agg(
-        {"commit": "count", "lines_code": "first", "indentation": "first"}
+        {"commit": "count", "lines_code": "last", "indentation": "last"}
     )
     data = data.rename(columns={"commit": "revisions"})
 
