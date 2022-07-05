@@ -20,7 +20,7 @@ dash = "^1.12.0"
 mypy = "^0.780"
 flake8 = "^3.8.3"
 black = "^19.10b0"
-ipython = "^7.15.0"
+ipython = "^7.16.3"
 
 [tool.poetry.scripts]
 xrays = 'xrays:hotspots'
